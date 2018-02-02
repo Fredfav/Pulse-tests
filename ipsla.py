@@ -6,6 +6,7 @@ import select
 import time
 import datetime
 import json
+from time import sleep
 
 '''
     Test: Tests the latency between a nPoint and a target device. 
@@ -18,12 +19,12 @@ import json
         NAME            UNITS       DECIMALS    MIN/DEGRADED/CRITICAL/MAX   INVERTED    DESCRIPTION
         --------------- ----------- ----------- --------------------------- ----------- --------------------------------
         availability
-		lost																			Packet loss
-		latency_min		msec		0													Minimum latency
-		latency_avg		msec		0													Average latency
-		latency_max		msec		0													Maximum latency
-		jitter			msec		3													Jitter
-		MOS							2													MOS Score using G.711
+		lost_1																			Packet loss
+		latency_min_1	msec		0													Minimum latency
+		latency_avg_1	msec		0													Average latency
+		latency_max_1	msec		0													Maximum latency
+		jitter_1		msec		3													Jitter
+		MOS_1						2													MOS Score using G.711
 
     Chart Settings:
         Y-Axis Title:   Average latency
@@ -44,12 +45,12 @@ DEST_ADDR = "dest_addr"
 TIMEOUT = "timeout"
 
 ############################## OUTPUT #############################
-LOST = "lost"
-LATENCY_MIN = "latency_min"
-LATENCY_AVG = "latency_avg"
-LATENCY_MAX = "latency_max"
-JITTER = "jitter"
-MOS = "MOS"
+LOST = "lost_1"
+LATENCY_MIN = "latency_min_1"
+LATENCY_AVG = "latency_avg_1"
+LATENCY_MAX = "latency_max_1"
+JITTER = "jitter_1"
+MOS = "MOS_1"
 
 # From /usr/include/linux/icmp.h; your milage may vary.
 ICMP_ECHO_REQUEST = 8
@@ -169,6 +170,7 @@ def launch_ping(count, dest_addr, timeout):
 			time_sent.append(int(round(time.time() * 1000)))
 			
 			d = do_one(dest_addr, timeout)
+			
 			if d == None:
 				lost = lost + 1
 				time_recv.append(None)
@@ -194,6 +196,9 @@ def launch_ping(count, dest_addr, timeout):
 			drtt = (time_recv[i] - time_recv[h]) - (time_sent[i] - time_sent[h])
 			jitter.append(jitter[len(jitter) - 1] + (abs(drtt) - jitter[len(jitter) - 1]) / float(16))
 	
+		# Wait 100ms between IPSLA tests to avoid to send them to quickly
+		sleep(0.1)
+	
 	# Compute MOS Score using a R factor for codec G.711
 	if len(latency) > 0:
 		EffectiveLatency = sum(latency) / len(latency) + max(jitter) * 2 + 10
@@ -204,20 +209,20 @@ def launch_ping(count, dest_addr, timeout):
 			# Now, let's deduct 2.5 R values per percentage of packet loss
 			R = R - (lost * 2.5)
 		# Convert the R into an MOS value.(this is a known formula)
-		results['MOS'] = 1 + (0.035) * R + (.000007) * R * (R-60) * (100-R)
+		results['MOS_1'] = 1 + (0.035) * R + (.000007) * R * (R-60) * (100-R)
 	# Returning the results
-	results['lost'] = lost / float(count) * 100
+	results['lost_1'] = lost / float(count) * 100
 	
 	if len(latency) > 0:
-		results['latency_min'] = min(latency)
-		results['latency_max'] = max(latency)
-		results['latency_avg'] = sum(latency) / len(latency)
+		results['latency_min_1'] = min(latency)
+		results['latency_max_1'] = max(latency)
+		results['latency_avg_1'] = sum(latency) / len(latency)
 		results['availability'] = 1
 	else:
 		results['availability'] = 0 # Failure
 		
 	if len(jitter) > 0:
-		results['jitter'] = jitter[len(jitter) - 1] 
+		results['jitter_1'] = jitter[len(jitter) - 1] 
 	
 	return results
 
