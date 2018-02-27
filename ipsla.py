@@ -24,7 +24,7 @@ from time import sleep
 		latency_avg_1	msec		0													Average latency
 		latency_max_1	msec		0													Maximum latency
 		jitter_1		msec		3													Jitter
-		MOS_1						2													MOS Score using G.711
+		MOS_g711					2													MOS Score using G.711
 
     Chart Settings:
         Y-Axis Title:   Average latency
@@ -50,7 +50,7 @@ LATENCY_MIN = "latency_min_1"
 LATENCY_AVG = "latency_avg_1"
 LATENCY_MAX = "latency_max_1"
 JITTER = "jitter_1"
-MOS = "MOS_1"
+MOS = "MOS_g711"
 
 # From /usr/include/linux/icmp.h; your milage may vary.
 ICMP_ECHO_REQUEST = 8
@@ -114,7 +114,7 @@ def send_one_ping(my_socket, dest_addr, ID):
     # Header is type (8), code (8), checksum (16), id (16), sequence (16)
     my_checksum = 0
  
-    # Make a dummy heder with a 0 checksum.
+    # Make a dummy header with a 0 checksum.
     header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, my_checksum, ID, 1)
     bytesInDouble = struct.calcsize("d")
     data = (192 - bytesInDouble) * "Q"
@@ -209,7 +209,7 @@ def launch_ping(count, dest_addr, timeout):
 			# Now, let's deduct 2.5 R values per percentage of packet loss
 			R = R - (lost * 2.5)
 		# Convert the R into an MOS value.(this is a known formula)
-		results['MOS_1'] = 1 + (0.035) * R + (.000007) * R * (R-60) * (100-R)
+		results['MOS_g711'] = 1 + (0.035) * R + (.000007) * R * (R-60) * (100-R)
 	# Returning the results
 	results['lost_1'] = lost / float(count) * 100
 	

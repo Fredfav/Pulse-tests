@@ -8,12 +8,10 @@ import json
 import random
 
 '''
-    Test: Skype for Business Server : Instant Messages.
+    Test: Skype for Business Server : Persistent Chat Message.
     Suggested Icon: message
     Status: Development
-    Description: Tests the ability of two users to exchange instant messages using Skype for Business Server. 
-		The `Test-CsIm` cmdlet is a "synthetic transaction": a simulation of common Skype for Business Server activities used for health and performance monitoring. 
-		This cmdlet was introduced in Lync Server 2010.
+    Description: Verifies whether or not a pair of users can exchange messages using the Persistent Chat service (formerly known as the Group Chat service). This cmdlet was introduced in Lync Server 2013.
 		The prerequisites are the following ones:
 			1. Skype powershell module are installed on the nPoint
 			2. Set-ExecutionPolicy RemoteSigned is configured in Powershell
@@ -52,7 +50,7 @@ SENDER_PASSWORD = "ReceiverPassword"
 SENDER_SIP_ADDRESS = "ReceiverSIPAddress"
 
 ############################## OUTPUT #############################
-SFB_CS_IM = "SfB_CS_IM"
+SFB_CS_PERSISTENT_CHAT_MSG = "SfB_CS_PERSISTENT_CHAT_MSG"
 
 ###################################################################
 
@@ -61,15 +59,15 @@ SFB_CS_IM = "SfB_CS_IM"
 # Generation of the powershell script to be executed
 def create_powershell_script(target_fqdn, sender_login, sender_password, sender_sip_address, receiver_login, receiver_password, receiver_sip_address):
 	status = 0
-	f = open('Test-CsIm.ps1', 'w')
+	f = open('Test-CsPersistentChatMessage.ps1', 'w')
 	f.write('$User1 = "' + sender_login + '"\n')
 	f.write('$Password1 = ConvertTo-SecureString -String "' + sender_password + '" -AsPlainText -Force\n')
 	f.write('$cred1 = New-Object -TypeName "System.Management.Automation.PSCredential " -ArgumentList $User1, $Password1\n')
 	f.write('$User2 = "' + receiver_login + '"\n')
 	f.write('$Password2 = ConvertTo-SecureString -String "' + receiver_password + '" -AsPlainText -Force\n')
 	f.write('$cred2 = New-Object -TypeName "System.Management.Automation.PSCredential " -ArgumentList $User2, $Password2\n')
-	f.write('Test-CsIm -TargetFqdn "' + target_fqdn + '" -SenderSipAddress "' + sender_sip_address + '" -SenderCredential $cred1 -ReceiverSipAddress "'+ receiver_sip_address +'" -ReceiverCredential $cred2 -OutLoggerVariable TestCsIm\n')
-	f.write('$TestCsIm.ToXML() > Test-CsIm_Out.xml\n')
+	f.write('Test-CsPersistentChatMessage -TargetFqdn "' + target_fqdn + '" -SenderSipAddress "' + sender_sip_address + '" -SenderCredential $cred1 -ReceiverSipAddress "'+ receiver_sip_address +'" -ReceiverCredential $cred2 -OutLoggerVariable TestCsPersistentChatMessage\n')
+	f.write('$TestCsPersistentChatMessage.ToXML() > Test-CsPersistentChatMessage_Out.xml\n')
 	f.close
 	status = 1
 	return status
@@ -77,7 +75,7 @@ def create_powershell_script(target_fqdn, sender_login, sender_password, sender_
 # Launch the generated powershell script
 def call():
 		try :
-				command = r"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -executionpolicy remotesigned -File " + 'Test-CsIm.ps1'
+				command = r"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -executionpolicy remotesigned -File " + 'Test-CsPersistentChatMessage.ps1'
 				# Using subprocess gives you more versatility than os
 				p = Popen(command, shell = True, stdout = PIPE, stderr = PIPE, cwd = os.getcwd())
 				stdout, stderr = p.communicate()
@@ -87,7 +85,7 @@ def call():
 				return 0 # otherwise we failed, return nothing
 
 # Main function				
-def skype_csim(target_fqdn, sender_login, sender_password, sender_sip_address, receiver_login, receiver_password, receiver_sip_address):
+def skype_cs_persistent_chat_message(target_fqdn, sender_login, sender_password, sender_sip_address, receiver_login, receiver_password, receiver_sip_address):
 	results = {}
 	results['availability'] = 0
 	if os.name == 'nt':
@@ -104,7 +102,7 @@ def skype_csim(target_fqdn, sender_login, sender_password, sender_sip_address, r
 			s = latency[1].split('\r\n')
 			t = s[0].split(':') # to get the result in msec
 			latency = float(t[2]) * 1000 + float(t[0]) * 3600000 + float(t[1]) * 60000
-			results['SfB_CsIm'] = latency
+			results['SfB_CsPersistentChat'] = latency
 			results['is_pass'] = True # success!
 		else:
 			results['error'] = ''
@@ -125,10 +123,10 @@ def run(test_config):
 	receiver_password = config['ReceiverPassword']
 	receiver_sip_address = config['ReceiverSIPAddress']
 	
-	return json.dumps(skype_csim(target_fqdn, sender_login, sender_password, sender_sip_address, receiver_login, receiver_password, receiver_sip_address))
+	return json.dumps(skype_cs_persistent_chat_message(target_fqdn, sender_login, sender_password, sender_sip_address, receiver_login, receiver_password, receiver_sip_address))
 
 test_config = {
-	'TargetFqdn' : 'skype.corp.cloud',
+	'TargetFqdn' : 'permanentchat.corp.cloud',
 	'SenderLogin' : 'CORP\user1',
 	'SenderPassword' : 'M3tr0logy',
 	'SenderSIPAddress' : 'user1@corp.cloud',
