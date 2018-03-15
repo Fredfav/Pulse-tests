@@ -112,21 +112,21 @@ def run_selenium(siteURL, basic_auth, username, password):
 	return results
 
 def run(test_config):
-	# Test configuration
-	test_config = {
-		'siteURL' : 'https://www.yahoo.com/news/politics/',
-		#'siteURL' : 'http://replybot.herokuapp.com/basic-auth', 
-		'basic_auth' : False,
-		'UserName' : 'user',
-		'Password' : 'passwd'
-	}
-
 	config = json.loads(test_config)
 	siteURL = config['siteURL']
 	basic_auth = config['basic_auth']
 	username = config['UserName']
 	password = config['Password']
 	return json.dumps(run_selenium(siteURL, basic_auth, username, password))
+
+# Test configuration
+test_config = {
+	'siteURL' : 'https://www.yahoo.com/news/politics/',
+	#'siteURL' : 'http://replybot.herokuapp.com/basic-auth', 
+	'basic_auth' : False,
+	'UserName' : 'user',
+	'Password' : 'passwd'
+}
 
 #results = run(json.dumps(test_config))
 #print(results) # we can verify on the nPoint this way
