@@ -2,9 +2,10 @@ import os
 import json
 import string
 import time
+import uuid
+import zipfile
+import shutil
 from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.firefox.firefox_binary import FirefoxBinary
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.alert import Alert
 from selenium.webdriver.support.ui import WebDriverWait as wait
@@ -12,17 +13,18 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.chrome.options import Options
 
 '''
 	Test: Launch a Web transaction and return enhanced response time (integrating AJAX and asynchronous transactions response time)
 	Suggested Icon: open in browser
 	Status: Development
 	Description: This script launch a specific URL and return full detail response time.
-
     Requirements:
-	
+		Firefox needs to be installed
+		Firefox binary need to be declared in the PATH env variable
 	Logs:
-    	
+    	None at this stage
     Metrics:
         NAME            	UNITS       DECIMALS    MIN/DEGRADED/CRITICAL/MAX   INVERTED    DESCRIPTION
         -------------------	----------- ----------- --------------------------- ----------- --------------------------------
@@ -48,35 +50,19 @@ from selenium.common.exceptions import NoSuchElementException
         UserName          			text        50                              	The name of the user which is used to log on. Acceptable forms are down-level logon name or user principal name.
         Password          			password    50                              	The password of the user which is used to log on.
 		ElementID					text		50									Element ID to find in the page
-		ElementName					text		50									Element Name to find in the page
 		Timeout						integer											Maximum expected time to get the page available
 '''
 
-############################## INPUT ##############################
-SITE_URL = "SiteURL"
-AUTHENTICATION = "basic_auth"
-USERNAME = "UserName"
-PASSWORD = "Password"
-ELEMENT_ID = "Element_ID"
-ELEMENT_NAME = "Element_Name"
-TIMEOUT = "Timeout"
-
-############################## OUTPUT #############################
-DOMAIN_LOOKUP = "domainLookup"
-SECURE_CONNECTION = "secureConnection"
-BACK_END = "back_end"
-FRONT_END = "front_end"
-LOAD_EVENT = "load_event"
-TRANSACTION_TIME = "transaction_time"
-OVERALL_Time = "overall_time"
+############################## GLOBAL CONSTANT ##############################
+CHROME_PATH = 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'
+CHROMEDRIVER_PATH = 'C:/Python27/chromedriver'
 
 ###################################################################
 
 # Splitting up functions for better error reporting potential
 # Compute the performance data
-def compute_perf(performance):
+def compute_perf(performance, availability, error):
 	results = {}
-#	results['availability'] = 1
 	results['overallTime'] = performance['EndTime'] - performance['StartTime']
 	results['domainLookup'] = performance['domainLookupEnd'] - performance['domainLookupStart']
 	if (performance['secureConnectionStart'] == 0):
@@ -91,10 +77,12 @@ def compute_perf(performance):
 		results['load_event'] = 0
 	else:
 		results['load_event'] = performance['loadEventEnd'] - performance['loadEventStart']
+	results['availability'] = availability
+	results['error'] = error
 	return results
 
 # Retrieve the browser performance data
-def browser_perf(self, start_time):
+def browser_perf(self, start_time, availability, error):
 	performance = {}
 	performance['StartTime'] = start_time
 	# Retrieve the performance indicators from the browser
@@ -114,53 +102,102 @@ def browser_perf(self, start_time):
 	performance['loadEventEnd'] = self.execute_script("return window.performance.timing.loadEventEnd")
 	performance['EndTime'] = int(round(time.time() * 1000))
 	# Compute the performance indicators
-	results = compute_perf(performance)
+	results = compute_perf(performance, availability, error)
 	return results
 
-# Management of the authentication window
-def mgmt_authentication(self, username, password):
-	try:
-		wait(self, 5).until(EC.alert_is_present())
-		alert = self.switch_to_alert()
-		alert.send_keys(username + Keys.TAB + password)
-		alert.accept()
+# Generate manifest file for Chrome extension
+def generate_manifest(directory):
+	filename = os.path.join(directory, 'manifest.json')
+	status = False
+	with open(filename, 'w') as f:
+		f.write('{\n')
+		f.write('  "manifest_version": 2,\n')
+		f.write('	"name": "Authentication for ...",\n')
+		f.write('	"version": "1.0.0",\n')
+		f.write('	"permissions": ["<all_urls>", "webRequest", "webRequestBlocking"],\n')
+		f.write('	"background": {\n')
+		f.write('		"scripts": ["background.js"]\n')
+		f.write('	}\n')
+		f.write('}\n')		
+		f.close()
 		status = True
-	except TimeoutException:
+	return status
+
+# Generate Javascript exception file for Chrome
+def generate_extension(directory, username, password):
+	filename = os.path.join(directory, 'background.js')
+	status = False
+	with open(filename, 'w') as f:
+		f.write('var username = "' + username + '";\n')
+		f.write('var password = "' + password + '";\n')
+		f.write('var retry = 3;\n')
+		f.write('chrome.webRequest.onAuthRequired.addListener(\n')
+		f.write('function handler(details) {   \n') 
+		f.write('	if (--retry < 0)\n')
+		f.write('		return {cancel: true};\n')
+		f.write('	return {authCredentials: {username: username, password: password}};\n')
+		f.write('},\n')
+		f.write('{urls: ["<all_urls>"]},\n')
+		f.write("['blocking']\n")
+		f.write(');\n')
+		status = True
+	return status
+
+# Generate the file for the authentication window
+def mgmt_authentication(directory, username, password):
+	if generate_manifest(directory) and generate_extension(directory, username, password):
+		zip_filename = os.path.join(directory, 'background.zip')
+		zip = zipfile.ZipFile(zip_filename, 'w')
+		zip.write(os.path.join(directory, 'background.js'), 'background.js', compress_type = zipfile.ZIP_DEFLATED)
+		zip.write(os.path.join(directory, 'manifest.json'), 'manifest.json', compress_type = zipfile.ZIP_DEFLATED)
+		zip.close()
+		status = True
+	else:
 		status = False
 	return status
 
 # Main function
-def run_selenium(siteURL, authentication, username, password, element_id, element_name, timeout):
+def run_selenium(siteURL, authentication, username, password, ElementID, timeout):
 	results = {}
-	StartTime = int(round(time.time() * 1000))
-	caps = webdriver.DesiredCapabilities.FIREFOX
-	caps["marionette"] = True
-	driver = webdriver.Firefox(capabilities=caps)
-	driver.get(siteURL)
-	# Authentication window management
+	error = ''
+	chrome_options = Options()
+	#chrome_options.add_argument("headless")
+	chrome_options.binary_location = CHROME_PATH
 	if authentication:
-		if mgmt_authentication(driver, username, password):
-			results['availability'] = 1
+		directory = os.path.join('', str(uuid.uuid4()))
+		if not os.path.exists(directory):
+			os.makedirs(directory)
+		if mgmt_authentication(directory, username, password):
+			availability = 1
+			extension = os.path.join(directory, 'background.zip')
+			chrome_options.add_extension(extension)
+			driver = webdriver.Chrome(executable_path = CHROMEDRIVER_PATH, chrome_options = chrome_options)
 		else:
-			results['availability'] = 0
-	if element_id or element_name:
-		if element_id:
-			try:
-				element = wait(driver, timeout).until(EC.presence_of_element_located((By.ID, element_id)))
-				results['availability'] = 1
-			except:
-				results['availability'] = 0
-		elif element_name:
-			try:
-				element = wait(driver, timeout).until(EC.presence_of_element_located((By.NAME, element_name)))
-				results['availability'] = 1
-			except:
-				results['availability'] = 0	
-		results = browser_perf(driver, StartTime)
+			availability = 0
+			error = 'Error in authentication'
+	else:
+		driver = webdriver.Chrome(executable_path = CHROMEDRIVER_PATH)
+	StartTime = int(round(time.time() * 1000))
+	# Authentication window management
+	driver.get(siteURL)
+	if ElementID:
+		try:
+			element = wait(driver, timeout).until(EC.presence_of_element_located((By.ID, ElementID)))
+#			SearchItem = '//*[contains(text(),"' + ElementID + '")]'
+#			print SearchItem
+#			element = wait(driver, timeout).until(EC.presence_of_element_located((By.XPATH, SearchItem)))
+			availability = 1
+		except:
+			availability = 0
+			error = 'Timeout in finding Element ID in the page'
+		results = browser_perf(driver, StartTime, availability, error)
 	else:
 		results['availability'] = 0
+		results['error'] = 'Element ID not defined'
 	# Close the browser
 	driver.close()
+	if authentication:
+		shutil.rmtree(directory)
 	return results
 
 def run(test_config):
@@ -169,19 +206,17 @@ def run(test_config):
 	authentication = config['authentication']
 	username = config['UserName']
 	password = config['Password']
-	element_id = config['Element_ID']
-	element_name = config['Element_Name']
+	ElementID = config['ElementID']
 	timeout = config['Timeout']
-	return json.dumps(run_selenium(siteURL, authentication, username, password, element_id, element_name, timeout))
+	return json.dumps(run_selenium(siteURL, authentication, username, password, ElementID, timeout))
 
-# Test configuration
+# Test configuration	
 test_config = {
 	'siteURL' : 'http://replybot.herokuapp.com/basic-auth', 
 	'authentication' : True,
-	'UserName' : 'username',
+	'UserName' : 'user',
 	'Password' : 'passwd',
-	'Element_ID' : '',
-	'Element_Name' : '',
+	'ElementID' : 'body', 
 	'Timeout' : 30
 }
 
