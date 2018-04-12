@@ -5,6 +5,9 @@ import time
 import uuid
 import zipfile
 import shutil
+import stopit
+import logging
+import chromedriver_binary
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.alert import Alert
@@ -21,11 +24,18 @@ from selenium.webdriver.chrome.options import Options
 	Status: Development
 	Description: This script launch a specific URL and return full detail response time.
     Requirements:
-		Firefox needs to be installed
-		Firefox binary need to be declared in the PATH env variable
+		Chrome driver needs to be installed
 	Logs:
     	None at this stage
-    Metrics:
+    Changes:
+		v8:
+			Linux platform compatibility
+			Add the support of chromedriver_binary for the support of nPoint v2.6
+			Timeout management
+		v9:
+			Logging capability
+			Screenshot at the end of the test
+	Metrics:
         NAME            	UNITS       DECIMALS    MIN/DEGRADED/CRITICAL/MAX   INVERTED    DESCRIPTION
         -------------------	----------- ----------- --------------------------- ----------- --------------------------------
         availability
@@ -51,14 +61,27 @@ from selenium.webdriver.chrome.options import Options
         Password          			password    50                              	The password of the user which is used to log on.
 		ElementID					text		50									Element ID to find in the page
 		Timeout						integer											Maximum expected time to get the page available
+		Logging						boolean											Log the results
+		Screenshot					boolean											Generate a screenshot at the end of the test to see what is the browser behavior
 '''
+############################# OS DEPENDANT SETUP ############################
+if os.name == 'posix':
+	import signal
+	from signal import SIGCHLD
 
-############################## GLOBAL CONSTANT ##############################
-CHROME_PATH = 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'
-CHROMEDRIVER_PATH = 'C:/Python27/chromedriver'
-
+############################## GLOBAL DECLARATION ##############################
+if os.name == 'nt':
+	CHROME_PATH = 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'
+	CHROMEDRIVER_PATH = 'C:/Python27/chromedriver.exe'
+elif os.name == 'posix':
+	from pyvirtualdisplay import Display
+	CHROMEDRIVER_PATH = '/opt/ntct/gemini/chromium/bin/chrome'
+	CHROME_PATH = '/opt/ntct/gemini/chromedriver'
+else:
+	CHROMEDRIVER_PATH = ''
+	CHROME_PATH = ''
+	
 ###################################################################
-
 # Splitting up functions for better error reporting potential
 # Compute the performance data
 def compute_perf(performance, availability, error):
@@ -156,13 +179,25 @@ def mgmt_authentication(directory, username, password):
 		status = False
 	return status
 
-# Main function
-def run_selenium(siteURL, authentication, username, password, ElementID, timeout):
-	results = {}
-	error = ''
+# Start Chrome driver
+def start_chrome_driver(authentication, username, password):
+	# Configure and start Chrome
 	chrome_options = Options()
-	#chrome_options.add_argument("headless")
-	chrome_options.binary_location = CHROME_PATH
+	# Use headless mode
+	chrome_options.add_argument('no-sandbox')
+	chrome_options.add_argument('start-maximized')	
+	# OS dependant startup
+	if os.name == 'nt':
+		chrome_options.binary_location = CHROME_PATH
+		display = ''
+	elif os.name == 'posix':
+		display = Display(visible = 0, size = (1024, 768))
+		display.start()
+		chrome_options.add_argument("--verbose")
+		chrome_options.add_argument('--disable-gpu')
+		chrome_options.add_argument('--lang=en')
+	else: # Not supported
+		driver = ''	
 	if authentication:
 		directory = os.path.join('', str(uuid.uuid4()))
 		if not os.path.exists(directory):
@@ -171,33 +206,77 @@ def run_selenium(siteURL, authentication, username, password, ElementID, timeout
 			availability = 1
 			extension = os.path.join(directory, 'background.zip')
 			chrome_options.add_extension(extension)
-			driver = webdriver.Chrome(executable_path = CHROMEDRIVER_PATH, chrome_options = chrome_options)
+			if os.name == 'nt':
+				driver = webdriver.Chrome(executable_path = CHROMEDRIVER_PATH, chrome_options = chrome_options)
+			elif os.name == 'posix':
+				driver = webdriver.Chrome(CHROME_PATH, chrome_options = chrome_options)
 		else:
 			availability = 0
 			error = 'Error in authentication'
 	else:
-		driver = webdriver.Chrome(executable_path = CHROMEDRIVER_PATH)
-	StartTime = int(round(time.time() * 1000))
-	# Authentication window management
-	driver.get(siteURL)
-	if ElementID:
-		try:
-			element = wait(driver, timeout).until(EC.presence_of_element_located((By.ID, ElementID)))
-#			SearchItem = '//*[contains(text(),"' + ElementID + '")]'
-#			print SearchItem
-#			element = wait(driver, timeout).until(EC.presence_of_element_located((By.XPATH, SearchItem)))
-			availability = 1
-		except:
-			availability = 0
-			error = 'Timeout in finding Element ID in the page'
-		results = browser_perf(driver, StartTime, availability, error)
-	else:
-		results['availability'] = 0
-		results['error'] = 'Element ID not defined'
-	# Close the browser
-	driver.close()
+		directory = ''
+		if os.name == 'nt':
+			driver = webdriver.Chrome(executable_path = CHROMEDRIVER_PATH)
+		elif os.name == 'posix':
+			driver = webdriver.Chrome(CHROME_PATH, chrome_options = chrome_options)
+	return directory, driver, display
+
+# Exit Chrome driver
+def close_chrome_driver(driver, authentication, directory, display):
+	status = True
+	driver.quit()
+	# Cleanup authentication plugin files and directory
 	if authentication:
 		shutil.rmtree(directory)
+	if os.name == 'posix':
+		display.stop()
+	return status
+
+# Search an element in the web page
+def search_element(driver, ElementID, timeout, StartTime):
+	error = ''
+	try:
+		element = wait(driver, timeout).until(EC.presence_of_element_located((By.ID, ElementID)))
+		availability = 1
+	except:
+		availability = 0
+		error = 'Timeout in finding Element ID in the page'
+	results = browser_perf(driver, StartTime, availability, error)
+	return results
+	
+# Main function
+def run_selenium(siteURL, authentication, username, password, ElementID, timeout, screenshot, logging):
+	results = {}
+	results['error'] = ''
+	if logging:
+		stopit_logger = logging.getLogger('stopit')
+		stopit_logger.seLevel(logging.ERROR)
+	with stopit.ThreadingTimeout(timeout) as to_ctx_mgr:
+		assert to_ctx_mgr.state == to_ctx_mgr.EXECUTING
+		# Chrome startup
+		directory, driver, display = start_chrome_driver(authentication, username, password)		
+		StartTime = int(round(time.time() * 1000))
+		# navigation to the URL
+		driver.get(siteURL)
+		# Search element in page
+		if ElementID:
+			results = search_element(driver, ElementID, timeout, StartTime)
+		else:
+			results['availability'] = 0
+			results['error'] = 'No Element ID defined'
+	if to_ctx_mgr.state == to_ctx_mgr.TIMED_OUT:
+		# Timeout occurred while executing the block
+		results['availability'] = 0
+		results['error'] = 'Timeout executing the test'
+	elif to_ctx_mgr.state == to_ctx_mgr.EXECUTED:
+		if screenshot:
+			driver.save_screenshot('screenshot.png')
+		# All's fine, everything was executed within timeout seconds
+		# Close the browser
+		if close_chrome_driver(driver, authentication, directory, display):
+			results['error'] = results['error']
+		else:
+			results['error'] = results['error'] + ' Chrome driver not properly closed'
 	return results
 
 def run(test_config):
@@ -208,16 +287,20 @@ def run(test_config):
 	password = config['Password']
 	ElementID = config['ElementID']
 	timeout = config['Timeout']
-	return json.dumps(run_selenium(siteURL, authentication, username, password, ElementID, timeout))
+	screenshot = config['Screenshot']
+	logging = config['Logging']
+	return json.dumps(run_selenium(siteURL, authentication, username, password, ElementID, timeout, screenshot, logging))
 
 # Test configuration	
 test_config = {
-	'siteURL' : 'http://replybot.herokuapp.com/basic-auth', 
-	'authentication' : True,
-	'UserName' : 'user',
-	'Password' : 'passwd',
-	'ElementID' : 'body', 
-	'Timeout' : 30
+	'siteURL' : 'https://www.yahoo.com/news/politics/',
+	'authentication' : False,
+	'UserName' : '',
+	'Password' : '',
+	'ElementID' : 'YDC-Col2', # Yahoo
+	'Timeout' : 30,
+	'Screenshot' : True,
+	'Logging' : False
 }
 
 results = run(json.dumps(test_config))
