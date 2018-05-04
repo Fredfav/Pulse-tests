@@ -30,18 +30,21 @@ from selenium.webdriver.chrome.options import Options
     	
     Changes:
 		v1:
-			Linux platform compatibility
+			Initial version
+		v2:
+			Navigation workflow modification
+			Update on the computed metrics
+			Update logging capabilities
 	Metrics:
         NAME            	UNITS       DECIMALS    MIN/DEGRADED/CRITICAL/MAX   INVERTED    DESCRIPTION
         -------------------	----------- ----------- --------------------------- ----------- --------------------------------
         availability
-        ot_dns				ms		    0                                       N           DNS query response time
-		ot_ssl				ms			0										N			SSL Handshake response time
 		ot_server			ms			0										N			Server + data network transfer time
 		ot_client			ms			0										N			browser processing time
 		ot_login			ms			0										N			overall transaction time
-		ot_transaction		ms			0										N			Overall time for the page to be loaded and ready to use
-		ot_network			ms			0										N			Network time
+		ot_kb				ms			0										N			Overall time for the page to be loaded and ready to use
+		ot_cockpit			ms			0										N			Overall time for the workcockpit page to be loaded and ready to use
+		ot_logout			ms			0										N			Overall time for the logout
 		
     Chart Settings:
         Y-Axis Title:   Response Time
@@ -54,9 +57,7 @@ from selenium.webdriver.chrome.options import Options
         SiteURL			  			text        100 			                	The complete URL of the StoreFront Receiver for Web site or NetScaler Gateway portal.
         UserName          			text        50                              	The name of the user which is used to log on. Acceptable forms are down-level logon name or user principal name.
         Password          			password    50                              	The password of the user which is used to log on.
-		XPath						text		50									Element on the web page using XML path expression to find so that the web page is estimated to be loaded
 		Timeout						integer											Maximum expected time to get the page available
-		Logging						boolean											Log the results
 		Screenshot					boolean											Generate a screenshot at the end of the test to see what is the browser behavior
 '''
 ############################# OS DEPENDANT SETUP ############################
@@ -75,27 +76,24 @@ elif os.name == 'posix':
 else:
 	CHROMEDRIVER_PATH = ''
 	CHROME_PATH = ''
-	
+
+############################## XPATH ##############################
+XPath_KB = '/html/body/form/div[4]/div/div[3]/main/div/div[2]/div/div/div/table/tbody/tr[1]/td[2]'
+XPath_cockpit_menu = "//span[@onclick='__doPostBack(\"pbeh\", \"shortcut_scbl0.0\")']'"
+XPath_cockpit = '/html/body/form/div[4]/div/div[1]/nav/li[1]/ul/li[1]/span/span'
+XPath_cockpit_item = '/html/body/form/div[4]/div/div[3]/main/div/div[5]/div/div/div[3]/div/div/div/div[3]/div[2]/div/div[2]/div[1]/div[2]/div[2]/div/div/div[2]/div[2]/div/div[1]/div[2]'
+XPath_logout = '//*[@id="LogoutTimerButton"]'
+
 ###################################################################
 # Splitting up functions for better error reporting potential
 # Compute the performance data
 def compute_perf(performance, availability, error):
 	results = {}
 	results['ot_login'] = performance['LoginTime']
-	results['ot_transaction'] = performance['EndTime'] - performance['StartTime']
-	results['ot_dns'] = performance['domainLookupEnd'] - performance['domainLookupStart']
-	if (performance['secureConnectionStart'] == 0):
-		results['ot_ssl'] = 0
-	else:
-		results['ot_ssl'] = performance['requestStart'] - performance['secureConnectionStart']
+	results['ot_cockpit'] = performance['EndTime'] - performance['StartTime']
 	results['ot_network'] = performance['connectEnd'] - performance['connectStart']
 	results['ot_server'] = (performance['responseEnd'] - performance['navigationStart']) - results['ot_network']
 	results['ot_client'] = performance['domComplete'] - performance['domLoading']
-	#results['ot_transaction'] = performance['domComplete'] - performance['navigationStart']
-	if (performance['loadEventStart'] == 0):
-		results['ot_load_event'] = 0
-	else:
-		results['ot_load_event'] = performance['loadEventEnd'] - performance['loadEventStart']
 	results['availability'] = availability
 	results['error'] = error
 	return results
@@ -219,17 +217,49 @@ def close_chrome_driver(driver, directory, display):
 		display.stop()
 	return status
 
-# Search an element in the web page
-def search_element(driver, XPath, timeout, StartTime, LoginTime):
+# Search for the KB item in the web page
+def search_kb(driver, XPath, timeout, StartTime, LoginTime):
 	error = ''
 	try:
 		element = wait(driver, timeout).until(EC.presence_of_element_located((By.XPATH, XPath)))
 		availability = 1
 	except:
 		availability = 0
-		error = 'Timeout in finding XPath in the page'
+		error = 'Timeout in finding KB object in the page'
 	results = browser_perf(driver, StartTime, LoginTime, availability, error)
 	return results
+
+# Search for the cockpit item
+def search_cockpit(driver, XPath, timeout):
+	error = ''
+	try:
+		element = wait(driver, timeout).until(EC.presence_of_element_located((By.XPATH, XPath)))
+		availability = True
+	except:
+		availability = False
+		error = 'Timout in finding cockpit object in the page'
+	return availability
+
+# Navigation to workcockpit
+def goto_cockpit(driver, timeout):
+	start_time = int(round(time.time() * 1000))
+	try:
+		driver.find_element_by_xpath(XPath_cockpit_menu).click()
+		element = wait(driver, timeout).until(EC.presence_of_element_located((By.XPATH, XPath_cockpit_item)))
+		availability = True
+		stop_time = int(round(time.time() * 1000))
+	except:
+		availability = False
+		error = "Issue while selecting work cockpit option"
+		stop_time = int(round(time.time() * 1000))
+	return stop_time - start_time
+	
+# Logout from Omnitracker
+def logout_omnitracker(driver):
+	start_time = int(round(time.time() * 1000))
+	driver.find_element_by_xpath(XPath_logout).click()
+	stop_time = int(round(time.time() * 1000))
+	return stop_time - start_time
 
 # Check if a popup alert window is present when launching the URL
 def is_alert_present(driver):
@@ -246,12 +276,9 @@ def close_alert(driver):
 	return alert_text
 	
 # Main function
-def run_selenium(siteURL, username, password, XPath, timeout, screenshot, logging):
+def run_selenium(siteURL, username, password, timeout, screenshot):
 	results = {}
 	results['error'] = ''
-	if logging:
-		stopit_logger = logging.getLogger('stopit')
-		stopit_logger.seLevel(logging.ERROR)
 	with stopit.ThreadingTimeout(timeout) as to_ctx_mgr:
 		assert to_ctx_mgr.state == to_ctx_mgr.EXECUTING
 		# Chrome startup
@@ -269,13 +296,19 @@ def run_selenium(siteURL, username, password, XPath, timeout, screenshot, loggin
 		driver.find_element_by_id("LoginButton").click()
 		LoginStopTime = int(round(time.time() * 1000))
 		LoginTime = LoginStopTime - LoginStartTime
-		# Search element in page
+		# Wait for the KB page to be loaded
 		TransactionStartTime = int(round(time.time() * 1000))
-		if XPath:
-			results = search_element(driver, XPath, timeout, TransactionStartTime, LoginTime)
+		if XPath_KB:
+			results = search_kb(driver, XPath_KB, timeout, TransactionStartTime, LoginTime)
 		else:
 			results['availability'] = 0
-			results['error'] = 'No Element ID defined'
+			results['error'] = 'KB item not found'
+		# Logout
+		if XPath_logout:
+			results['ot_logout'] = logout_omnitracker(driver)
+		else:
+			results['availability'] = 0
+			results['error'] = 'logout button not found'
 	if to_ctx_mgr.state == to_ctx_mgr.TIMED_OUT:
 		# Timeout occurred while executing the block
 		results['availability'] = 0
@@ -296,21 +329,17 @@ def run(test_config):
 	siteURL = config['siteURL']
 	username = config['UserName']
 	password = config['Password']
-	XPath = config['XPath']
 	timeout = config['Timeout']
 	screenshot = config['Screenshot']
-	logging = config['Logging']
-	return json.dumps(run_selenium(siteURL, username, password, XPath, timeout, screenshot, logging))
+	return json.dumps(run_selenium(siteURL, username, password, timeout, screenshot))
 
 # Test configuration	
-test_config = { 
-	'siteURL' : 'https://omnitracker.test.com/otwg/?tzo=-120',
-	'UserName' : 'login',
-	'Password' : 'passwd',
-	'XPath' : '/html/body/form/div[4]/div/div[3]/main/div/div[2]/div/div/div/table/tbody/tr[1]/td[2]',  
-	'Timeout' : 30,
-	'Screenshot' : True,
-	'Logging' : False
+test_config = {
+	'siteURL' : 'https://omnitracker-prd-appl.corp.cloud/otwg/?tzo=-120',
+	'UserName' : 'user',
+	'Password' : 'password',
+	'Timeout' : 45,
+	'Screenshot' : True
 }
 
 #results = run(json.dumps(test_config))
